@@ -54,8 +54,12 @@ async def fetch_station_details(client: httpx.AsyncClient, station_id: int) -> O
     Returns the 'data' dictionary on success, or None on failure/invalid responses.
     """
     url = STATION_API_TEMPLATE.format(station_id=station_id)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+    }
     try:
-        response = await client.get(url, timeout=3.0)
+        response = await client.get(url, headers=headers, timeout=3.0)
         if response.status_code == 200:
             json_data = response.json()
             if json_data.get("success") is True and "data" in json_data:
