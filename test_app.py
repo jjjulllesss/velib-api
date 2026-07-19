@@ -57,20 +57,27 @@ class TestVelibCommute(unittest.TestCase):
         self.assertFalse(data["end_fallback_used"])
         self.assertFalse(data["no_docks_available"])
         
-        # Verify selected bikes sorting and capacity limit (max 3, and only mechanical)
-        bikes = data["selected_bikes"]
-        self.assertEqual(len(bikes), 3)  # we have 3 mechanical, the electric one should be excluded
-        self.assertEqual(bikes[0]["id"], "bike_high_score_new")  # highest score & most recent
-        self.assertEqual(bikes[1]["id"], "bike_high_score_old")  # highest score but older
-        self.assertEqual(bikes[2]["id"], "bike_low_score")  # lower score
+        # Verify selected mechanical bikes sorting and capacity limit (max 3, and only mechanical)
+        mech_bikes = data["selected_mechanical_bikes"]
+        self.assertEqual(len(mech_bikes), 3)  # we have 3 mechanical
+        self.assertEqual(mech_bikes[0]["id"], "bike_high_score_new")  # highest score & most recent
+        self.assertEqual(mech_bikes[1]["id"], "bike_high_score_old")  # highest score but older
+        self.assertEqual(mech_bikes[2]["id"], "bike_low_score")  # lower score
+
+        # Verify selected electric bikes (should have the electric one)
+        elec_bikes = data["selected_electric_bikes"]
+        self.assertEqual(len(elec_bikes), 1)
+        self.assertEqual(elec_bikes[0]["id"], "bike_electric")
         
         # Verify end station details
         self.assertEqual(data["end_station_used"]["id"], 2001)
         self.assertEqual(data["end_station_used"]["docks_available"], 5)
         
         # Verify summary
-        self.assertIn("Départ Station Depart 1, 3 vélos mécaniques trouvés.", data["summary"])
-        self.assertIn("Arrivée Station Arrivee 1, 5 bornes disponibles.", data["summary"])
+        self.assertIn("Departure Station Depart 1", data["summary"])
+        self.assertIn("3 mechanical bikes found", data["summary"])
+        self.assertIn("1 electric bike found", data["summary"])
+        self.assertIn("Arrival Station Arrivee 1, 5 docks available.", data["summary"])
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_start_fallback_and_end_fallback(self, mock_fetch: AsyncMock) -> None:
@@ -82,7 +89,6 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station Depart 1",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_electric", "type": "electric", "status": "available", "score": 100, "bikeRate": 3},
                     {"id": "bike_unavailable", "type": "mechanical", "status": "rented", "score": 100, "bikeRate": 3}
                 ]
             },
@@ -112,8 +118,8 @@ class TestVelibCommute(unittest.TestCase):
         # Start checks
         self.assertTrue(data["start_fallback_used"])
         self.assertEqual(data["start_station_used"]["id"], 1002)
-        self.assertEqual(len(data["selected_bikes"]), 1)
-        self.assertEqual(data["selected_bikes"][0]["id"], "bike_mech_alt")
+        self.assertEqual(len(data["selected_mechanical_bikes"]), 1)
+        self.assertEqual(data["selected_mechanical_bikes"][0]["id"], "bike_mech_alt")
         
         # End checks
         self.assertTrue(data["end_fallback_used"])
@@ -121,8 +127,8 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(data["end_station_used"]["docks_available"], 12)
         
         # Summary checks
-        self.assertIn("Pas de vélo mécanique sur la station principale, repli sur Station Depart 2 (Alternative).", data["summary"])
-        self.assertIn("Pas de borne libre sur la station d'arrivée principale, repli sur Station Arrivee 2 (Alternative), 12 bornes disponibles.", data["summary"])
+        self.assertIn("No mechanical bikes on primary station, fallback to Station Depart 2 (Alternative)", data["summary"])
+        self.assertIn("No free docks on primary arrival station, fallback to Station Arrivee 2 (Alternative), 12 docks available.", data["summary"])
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_no_bikes_no_docks_anywhere(self, mock_fetch: AsyncMock) -> None:
@@ -145,15 +151,17 @@ class TestVelibCommute(unittest.TestCase):
         data = response.json()
         
         self.assertTrue(data["no_mechanical_available"])
+        self.assertTrue(data["no_electric_available"])
         self.assertIsNone(data["start_station_used"])
-        self.assertEqual(data["selected_bikes"], [])
+        self.assertEqual(data["selected_mechanical_bikes"], [])
+        self.assertEqual(data["selected_electric_bikes"], [])
         
         self.assertTrue(data["no_docks_available"])
         self.assertEqual(data["end_station_used"]["id"], 2001)
         
         # Summary checks
-        self.assertIn("Aucun vélo mécanique disponible sur les stations de départ.", data["summary"])
-        self.assertIn("Aucune borne libre sur les stations d’arrivée.", data["summary"])
+        self.assertIn("No bikes available on the departure stations.", data["summary"])
+        self.assertIn("No free docks on arrival stations.", data["summary"])
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_deduplication_and_capping(self, mock_fetch: AsyncMock) -> None:
@@ -218,12 +226,12 @@ class TestVelibCommute(unittest.TestCase):
         data = response.json()
         self.assertTrue(data["ok"])
         self.assertTrue(data["start_fallback_used"])  # Because we also used an alternative station
-        self.assertEqual(len(data["selected_bikes"]), 3)
-        self.assertEqual(data["selected_bikes"][0]["id"], "bike_primary_1")
-        self.assertEqual(data["selected_bikes"][1]["id"], "bike_secondary_1")
-        self.assertEqual(data["selected_bikes"][2]["id"], "bike_secondary_2")
+        self.assertEqual(len(data["selected_mechanical_bikes"]), 3)
+        self.assertEqual(data["selected_mechanical_bikes"][0]["id"], "bike_primary_1")
+        self.assertEqual(data["selected_mechanical_bikes"][1]["id"], "bike_secondary_1")
+        self.assertEqual(data["selected_mechanical_bikes"][2]["id"], "bike_secondary_2")
 
-        self.assertIn("Pas assez de vélos sur la station principale, repli sur Station Depart 2.", data["summary"])
+        self.assertIn("Not enough mechanical bikes on primary station, fallback to Station Depart 2", data["summary"])
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_no_bike_above_score_80_at_primary_checks_other_stations(self, mock_fetch: AsyncMock) -> None:
@@ -256,12 +264,12 @@ class TestVelibCommute(unittest.TestCase):
         data = response.json()
         self.assertTrue(data["ok"])
         self.assertTrue(data["start_fallback_used"])
-        self.assertEqual(len(data["selected_bikes"]), 3)
-        self.assertEqual(data["selected_bikes"][0]["id"], "bike_primary_1")
-        self.assertEqual(data["selected_bikes"][1]["id"], "bike_primary_2")
-        self.assertEqual(data["selected_bikes"][2]["id"], "bike_secondary_1")
+        self.assertEqual(len(data["selected_mechanical_bikes"]), 3)
+        self.assertEqual(data["selected_mechanical_bikes"][0]["id"], "bike_primary_1")
+        self.assertEqual(data["selected_mechanical_bikes"][1]["id"], "bike_primary_2")
+        self.assertEqual(data["selected_mechanical_bikes"][2]["id"], "bike_secondary_1")
 
-        self.assertIn("Pas assez de vélos sur la station principale, repli sur Station Depart 2.", data["summary"])
+        self.assertIn("Not enough mechanical bikes on primary station, fallback to Station Depart 2", data["summary"])
 
 if __name__ == "__main__":
     unittest.main()

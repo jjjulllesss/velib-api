@@ -49,13 +49,15 @@ class EndStationUsed(BaseModel):
 class CommuteResponse(BaseModel):
     ok: bool = Field(..., description="Statut de la requête")
     start_station_used: Optional[StartStationUsed] = Field(None, description="Station de départ retenue (None si aucun vélo)")
-    selected_bikes: List[SelectedBike] = Field(..., description="Liste des meilleurs vélos mécaniques (max 3)")
+    selected_mechanical_bikes: List[SelectedBike] = Field(..., description="Liste des meilleurs vélos mécaniques (max 3)")
+    selected_electric_bikes: List[SelectedBike] = Field(..., description="Liste des meilleurs vélos électriques (max 3)")
     start_fallback_used: bool = Field(..., description="Indique si une station de départ alternative a été utilisée")
     no_mechanical_available: bool = Field(..., description="Indique si aucun vélo mécanique n'était disponible")
+    no_electric_available: bool = Field(..., description="Indique si aucun vélo électrique n'était disponible")
     end_station_used: EndStationUsed = Field(..., description="Station d'arrivée retenue (principale par défaut si aucune borne)")
     end_fallback_used: bool = Field(..., description="Indique si une station d'arrivée alternative a été utilisée")
     no_docks_available: bool = Field(..., description="Indique si aucune borne n'est disponible sur le trajet")
-    summary: str = Field(..., description="Résumé lisible en français pour Apple Shortcuts")
+    summary: str = Field(..., description="Résumé lisible en anglais pour Apple Shortcuts")
     checked_at: str = Field(..., description="Date et heure de vérification au format ISO 8601 UTC")
 
 # --- Query Params Parser ---
@@ -88,6 +90,90 @@ def parse_ids(param_name: str, val: Optional[str]) -> List[int]:
         ids.append(int(p))
     return ids
 
+# --- Helper logic for picking bikes of a specific type ---
+
+def select_bikes_for_type(
+    bike_type: str,
+    start_ids: List[int],
+    station_map: Dict[int, Dict[str, Any]]
+) -> tuple[List[SelectedBike], List[Dict[str, Any]], bool, bool]:
+    """
+    Selects bikes of a specific type (mechanical or electric) following the rules:
+    - Checks primary station. If it has <= 1 bike or no bike with score >= 80, it searches other stations as well.
+    - Caps at 3 bikes.
+
+    Returns:
+    - selected_bikes: List of SelectedBike objects
+    - stations_used_info: List of info dicts for stations from which bikes were taken
+    - primary_had_zero: boolean indicating primary station had 0 bikes of this type
+    - primary_had_insufficient: boolean indicating primary station had only 1 bike or no bike >= 80
+    """
+    selected_bikes = []
+    stations_used_info = []
+    primary_had_zero = False
+    primary_had_insufficient = False
+
+    # Check primary station's bikes of this type
+    primary_sid = start_ids[0]
+    primary_station = station_map.get(primary_sid)
+    if primary_station:
+        primary_typed_bikes = [
+            b for b in primary_station.get("bikes", [])
+            if b.get("type") == bike_type and b.get("status") == "available"
+        ]
+        if not primary_typed_bikes:
+            primary_had_zero = True
+        else:
+            has_score_80_or_more = any(int(b.get("score", 0)) >= 80 for b in primary_typed_bikes)
+            if len(primary_typed_bikes) == 1 or not has_score_80_or_more:
+                primary_had_insufficient = True
+
+    for idx, sid in enumerate(start_ids):
+        station = station_map.get(sid)
+        if not station:
+            continue
+
+        bikes = station.get("bikes", [])
+        typed_bikes = [
+            b for b in bikes
+            if b.get("type") == bike_type and b.get("status") == "available"
+        ]
+
+        if typed_bikes:
+            typed_bikes.sort(key=get_bike_sort_key)
+
+            remaining_slots = 3 - len(selected_bikes)
+            if remaining_slots <= 0:
+                break
+
+            top_bikes = typed_bikes[:remaining_slots]
+            for b in top_bikes:
+                selected_bikes.append(
+                    SelectedBike(
+                        id=str(b.get("id", "")),
+                        dockPosition=str(b.get("dockPosition", "")),
+                        score=int(b.get("score", 0)),
+                        bikeRate=int(b.get("bikeRate", 0)),
+                        lastRideTime=b.get("lastRideTime"),
+                        station_name=station.get("name", f"Station {sid}")
+                    )
+                )
+
+            stations_used_info.append({
+                "id": sid,
+                "name": station.get("name", f"Station {sid}"),
+                "priority": idx,
+                "bikes_count": len(top_bikes)
+            })
+
+            # Check if we should stop searching other stations
+            has_at_least_two = len(selected_bikes) >= 2
+            has_score_80 = any(b.score >= 80 for b in selected_bikes)
+            if has_at_least_two and has_score_80:
+                break
+
+    return selected_bikes, stations_used_info, primary_had_zero, primary_had_insufficient
+
 # --- Main API Endpoint ---
 
 @app.get("/api/commute", response_model=CommuteResponse)
@@ -111,92 +197,40 @@ async def get_commute(
             detail="Toutes les requêtes de stations auprès de l'API Velib ont échoué."
         )
 
-    # 3. Start selection logic (mechanical bikes)
-    selected_bikes = []
-    stations_used_info = []
-    primary_had_zero = False
-    primary_had_insufficient = False
+    # 3. Start selection logic (mechanical & electric bikes)
+    selected_mechanical_bikes, mech_stations_info, mech_primary_zero, mech_primary_insufficient = select_bikes_for_type(
+        "mechanical", start_ids, station_map
+    )
+    selected_electric_bikes, elec_stations_info, elec_primary_zero, elec_primary_insufficient = select_bikes_for_type(
+        "electric", start_ids, station_map
+    )
 
-    # Check if primary station has bikes
-    primary_sid = start_ids[0]
-    primary_station = station_map.get(primary_sid)
-    if primary_station:
-        primary_mech = [
-            b for b in primary_station.get("bikes", [])
-            if b.get("type") == "mechanical" and b.get("status") == "available"
-        ]
-        if not primary_mech:
-            primary_had_zero = True
-        else:
-            # Check if primary has only 1 bike or no bike with score >= 80
-            has_score_80_or_more = any(int(b.get("score", 0)) >= 80 for b in primary_mech)
-            if len(primary_mech) == 1 or not has_score_80_or_more:
-                primary_had_insufficient = True
+    no_mechanical_available = len(selected_mechanical_bikes) == 0
+    no_electric_available = len(selected_electric_bikes) == 0
 
-    for idx, sid in enumerate(start_ids):
-        station = station_map.get(sid)
-        if not station:
-            continue
-
-        bikes = station.get("bikes", [])
-        # filter mechanical & available
-        mech_bikes = [
-            b for b in bikes
-            if b.get("type") == "mechanical" and b.get("status") == "available"
-        ]
-
-        if mech_bikes:
-            # Sort bikes (score desc, bikeRate desc, lastRideTime desc, id asc)
-            mech_bikes.sort(key=get_bike_sort_key)
-            
-            # How many can we take?
-            remaining_slots = 3 - len(selected_bikes)
-            if remaining_slots <= 0:
-                break
-
-            top_bikes = mech_bikes[:remaining_slots]
-            for b in top_bikes:
-                selected_bikes.append(
-                    SelectedBike(
-                        id=str(b.get("id", "")),
-                        dockPosition=str(b.get("dockPosition", "")),
-                        score=int(b.get("score", 0)),
-                        bikeRate=int(b.get("bikeRate", 0)),
-                        lastRideTime=b.get("lastRideTime"),
-                        station_name=station.get("name", f"Station {sid}")
-                    )
-                )
-            
-            stations_used_info.append({
-                "id": sid,
-                "name": station.get("name", f"Station {sid}"),
-                "priority": idx,
-                "bikes_count": len(top_bikes)
-            })
-
-            # Check if we should stop searching other stations.
-            # We can stop if we have at least 2 bikes in selected_bikes AND at least one of them has score >= 80.
-            has_at_least_two = len(selected_bikes) >= 2
-            has_score_80 = any(b.score >= 80 for b in selected_bikes)
-            if has_at_least_two and has_score_80:
-                break
-
-    # Determine fallback used & start station used
+    # Determine start_station_used and fallback
     start_station_used = None
     start_fallback_used = False
-    no_mechanical_available = True
 
-    if stations_used_info:
-        no_mechanical_available = False
-        # Use the first station we actually got a bike from as start_station_used
-        first_used = stations_used_info[0]
+    # Collect all stations from which we got either mechanical or electric bikes
+    combined_stations_info = []
+    seen_ids = set()
+    for s_info in (mech_stations_info + elec_stations_info):
+        if s_info["id"] not in seen_ids:
+            seen_ids.add(s_info["id"])
+            combined_stations_info.append(s_info)
+
+    # Sort them by priority
+    combined_stations_info.sort(key=lambda x: x["priority"])
+
+    if combined_stations_info:
+        first_used = combined_stations_info[0]
         start_station_used = StartStationUsed(
             id=first_used["id"],
             name=first_used["name"],
             priority=first_used["priority"]
         )
-        # Fallback was used if we used any station other than primary
-        start_fallback_used = any(info["priority"] > 0 for info in stations_used_info)
+        start_fallback_used = any(info["priority"] > 0 for info in combined_stations_info)
 
     # 4. End selection logic (available docks)
     end_station_used = None
@@ -242,15 +276,20 @@ async def get_commute(
     # 5. Generate summary
     summary_text = generate_summary(
         no_mechanical_available=no_mechanical_available,
+        no_electric_available=no_electric_available,
         start_fallback_used=start_fallback_used,
         start_station_used=start_station_used.model_dump() if start_station_used else None,
-        selected_bikes=[b.model_dump() for b in selected_bikes],
+        selected_mechanical_bikes=[b.model_dump() for b in selected_mechanical_bikes],
+        selected_electric_bikes=[b.model_dump() for b in selected_electric_bikes],
         no_docks_available=no_docks_available,
         end_fallback_used=end_fallback_used,
         end_station_used=end_station_used.model_dump(),
-        primary_had_zero=primary_had_zero,
-        primary_had_insufficient=primary_had_insufficient,
-        stations_used_info=stations_used_info
+        mech_primary_zero=mech_primary_zero,
+        mech_primary_insufficient=mech_primary_insufficient,
+        mech_stations_info=mech_stations_info,
+        elec_primary_zero=elec_primary_zero,
+        elec_primary_insufficient=elec_primary_insufficient,
+        elec_stations_info=elec_stations_info
     )
 
     checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -258,9 +297,11 @@ async def get_commute(
     return CommuteResponse(
         ok=True,
         start_station_used=start_station_used,
-        selected_bikes=selected_bikes,
+        selected_mechanical_bikes=selected_mechanical_bikes,
+        selected_electric_bikes=selected_electric_bikes,
         start_fallback_used=start_fallback_used,
         no_mechanical_available=no_mechanical_available,
+        no_electric_available=no_electric_available,
         end_station_used=end_station_used,
         end_fallback_used=end_fallback_used,
         no_docks_available=no_docks_available,

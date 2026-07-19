@@ -86,66 +86,78 @@ async def fetch_all_stations(station_ids: List[int]) -> Dict[int, Dict[str, Any]
 
 def generate_summary(
     no_mechanical_available: bool,
+    no_electric_available: bool,
     start_fallback_used: bool,
     start_station_used: Optional[Dict[str, Any]],
-    selected_bikes: List[Dict[str, Any]],
+    selected_mechanical_bikes: List[Dict[str, Any]],
+    selected_electric_bikes: List[Dict[str, Any]],
     no_docks_available: bool,
     end_fallback_used: bool,
     end_station_used: Dict[str, Any],
-    primary_had_zero: bool = False,
-    primary_had_insufficient: bool = False,
-    stations_used_info: List[Dict[str, Any]] = None
+    mech_primary_zero: bool = False,
+    mech_primary_insufficient: bool = False,
+    mech_stations_info: List[Dict[str, Any]] = None,
+    elec_primary_zero: bool = False,
+    elec_primary_insufficient: bool = False,
+    elec_stations_info: List[Dict[str, Any]] = None
 ) -> str:
     """
-    Generates a human-readable French summary for Apple Shortcuts.
+    Generates a human-readable English summary for Apple Shortcuts.
     """
-    # Start Part
-    if no_mechanical_available:
-        start_summary = "Aucun vélo mécanique disponible sur les stations de départ."
+    if no_mechanical_available and no_electric_available:
+        start_summary = "No bikes available on the departure stations."
     else:
-        num_bikes = len(selected_bikes)
-        bike_word = "vélo" if num_bikes <= 1 else "vélos"
-        mech_word = "mécanique" if num_bikes <= 1 else "mécaniques"
-        found_word = "trouvé" if num_bikes <= 1 else "trouvés"
+        # We found some bikes. Let's describe the departure situation.
+        station_name = start_station_used["name"] if start_station_used else "Unknown"
         
-        station_name = start_station_used["name"] if start_station_used else "Inconnue"
+        mech_parts = []
+        elec_parts = []
 
-        if primary_had_insufficient:
-            # We had only 1 bike or score < 80 on the main station and used others as well
-            if len(stations_used_info) > 1:
-                # Format a combined list of stations used
-                # Example: "Pas assez de vélos sur la station principale, repli sur Station 2."
-                # Or custom message
-                other_station_names = [info["name"] for info in stations_used_info if info["priority"] > 0]
-                others_str = ", ".join(other_station_names)
-                start_summary = f"Pas assez de vélos sur la station principale, repli sur {others_str}."
+        num_mech = len(selected_mechanical_bikes)
+        num_elec = len(selected_electric_bikes)
+
+        # 1. Determine mechanical message
+        if num_mech > 0:
+            mech_word = "mechanical bike" if num_mech == 1 else "mechanical bikes"
+            if mech_primary_insufficient and len(mech_stations_info) > 1:
+                other_names = [info["name"] for info in mech_stations_info if info["priority"] > 0]
+                others_str = ", ".join(other_names)
+                mech_parts.append(f"Not enough mechanical bikes on primary station, fallback to {others_str} ({num_mech} found)")
+            elif mech_primary_zero and start_fallback_used:
+                mech_parts.append(f"No mechanical bikes on primary station, fallback to {station_name} ({num_mech} found)")
             else:
-                # Fallback was not possible (no other stations available or they had 0 bikes)
-                # Just keep the standard text
-                start_summary = f"Départ {station_name}, {num_bikes} {bike_word} {mech_word} {found_word}."
-        elif primary_had_zero:
-            if start_fallback_used:
-                start_summary = f"Pas de vélo mécanique sur la station principale, repli sur {station_name}."
-            else:
-                start_summary = f"Départ {station_name}, {num_bikes} {bike_word} {mech_word} {found_word}."
+                mech_parts.append(f"{num_mech} {mech_word} found")
         else:
-            if start_fallback_used:
-                start_summary = f"Pas de vélo mécanique sur la station principale, repli sur {station_name}."
+            mech_parts.append("no mechanical bikes found")
+
+        # 2. Determine electric message
+        if num_elec > 0:
+            elec_word = "electric bike" if num_elec == 1 else "electric bikes"
+            if elec_primary_insufficient and len(elec_stations_info) > 1:
+                other_names = [info["name"] for info in elec_stations_info if info["priority"] > 0]
+                others_str = ", ".join(other_names)
+                elec_parts.append(f"Not enough electric bikes on primary station, fallback to {others_str} ({num_elec} found)")
+            elif elec_primary_zero and start_fallback_used:
+                elec_parts.append(f"No electric bikes on primary station, fallback to {station_name} ({num_elec} found)")
             else:
-                start_summary = f"Départ {station_name}, {num_bikes} {bike_word} {mech_word} {found_word}."
+                elec_parts.append(f"{num_elec} {elec_word} found")
+        else:
+            elec_parts.append("no electric bikes found")
+
+        start_summary = f"Departure {station_name}: {', '.join(mech_parts)} and {', '.join(elec_parts)}."
 
     # Arrival Part
     if no_docks_available:
-        end_summary = "Aucune borne libre sur les stations d’arrivée."
+        end_summary = "No free docks on arrival stations."
     else:
         num_docks = end_station_used.get("docks_available", 0)
-        dock_word = "borne" if num_docks <= 1 else "bornes"
-        avail_word = "disponible" if num_docks <= 1 else "disponibles"
+        dock_word = "dock" if num_docks == 1 else "docks"
+        avail_word = "available"
         
         station_name = end_station_used["name"]
         if end_fallback_used:
-            end_summary = f"Pas de borne libre sur la station d'arrivée principale, repli sur {station_name}, {num_docks} {dock_word} {avail_word}."
+            end_summary = f"No free docks on primary arrival station, fallback to {station_name}, {num_docks} {dock_word} {avail_word}."
         else:
-            end_summary = f"Arrivée {station_name}, {num_docks} {dock_word} {avail_word}."
+            end_summary = f"Arrival {station_name}, {num_docks} {dock_word} {avail_word}."
 
     return f"{start_summary} {end_summary}"
