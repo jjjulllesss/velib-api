@@ -102,62 +102,47 @@ def generate_summary(
     elec_stations_info: List[Dict[str, Any]] = None
 ) -> str:
     """
-    Generates a human-readable English summary for Apple Shortcuts.
+    Generates a structured English summary for Apple Shortcuts:
+
+    Mechanical:
+    - Position (score) station
+    ...
+
+    Electrical:
+    - Position (score) station
+    ...
+
+    Arrival: docks - station
     """
-    if no_mechanical_available and no_electric_available:
-        start_summary = "No bikes available on the departure stations."
+    # Mechanical section
+    mech_lines = ["Mechanical:"]
+    if selected_mechanical_bikes:
+        for bike in selected_mechanical_bikes:
+            pos = bike.get("dockPosition", "")
+            score = bike.get("score", 0)
+            station = bike.get("station_name", "Unknown")
+            mech_lines.append(f"- {pos} ({score}) {station}")
     else:
-        # We found some bikes. Let's describe the departure situation.
-        station_name = start_station_used["name"] if start_station_used else "Unknown"
+        mech_lines.append("- None")
         
-        mech_parts = []
-        elec_parts = []
-
-        num_mech = len(selected_mechanical_bikes)
-        num_elec = len(selected_electric_bikes)
-
-        # 1. Determine mechanical message
-        if num_mech > 0:
-            mech_word = "mechanical bike" if num_mech == 1 else "mechanical bikes"
-            if mech_primary_insufficient and len(mech_stations_info) > 1:
-                other_names = [info["name"] for info in mech_stations_info if info["priority"] > 0]
-                others_str = ", ".join(other_names)
-                mech_parts.append(f"Not enough mechanical bikes on primary station, fallback to {others_str} ({num_mech} found)")
-            elif mech_primary_zero and start_fallback_used:
-                mech_parts.append(f"No mechanical bikes on primary station, fallback to {station_name} ({num_mech} found)")
-            else:
-                mech_parts.append(f"{num_mech} {mech_word} found")
-        else:
-            mech_parts.append("no mechanical bikes found")
-
-        # 2. Determine electric message
-        if num_elec > 0:
-            elec_word = "electric bike" if num_elec == 1 else "electric bikes"
-            if elec_primary_insufficient and len(elec_stations_info) > 1:
-                other_names = [info["name"] for info in elec_stations_info if info["priority"] > 0]
-                others_str = ", ".join(other_names)
-                elec_parts.append(f"Not enough electric bikes on primary station, fallback to {others_str} ({num_elec} found)")
-            elif elec_primary_zero and start_fallback_used:
-                elec_parts.append(f"No electric bikes on primary station, fallback to {station_name} ({num_elec} found)")
-            else:
-                elec_parts.append(f"{num_elec} {elec_word} found")
-        else:
-            elec_parts.append("no electric bikes found")
-
-        start_summary = f"Departure {station_name}: {', '.join(mech_parts)} and {', '.join(elec_parts)}."
-
-    # Arrival Part
-    if no_docks_available:
-        end_summary = "No free docks on arrival stations."
+    # Electrical section
+    elec_lines = ["Electrical:"]
+    if selected_electric_bikes:
+        for bike in selected_electric_bikes:
+            pos = bike.get("dockPosition", "")
+            score = bike.get("score", 0)
+            station = bike.get("station_name", "Unknown")
+            elec_lines.append(f"- {pos} ({score}) {station}")
     else:
-        num_docks = end_station_used.get("docks_available", 0)
-        dock_word = "dock" if num_docks == 1 else "docks"
-        avail_word = "available"
+        elec_lines.append("- None")
         
-        station_name = end_station_used["name"]
-        if end_fallback_used:
-            end_summary = f"No free docks on primary arrival station, fallback to {station_name}, {num_docks} {dock_word} {avail_word}."
-        else:
-            end_summary = f"Arrival {station_name}, {num_docks} {dock_word} {avail_word}."
+    # Arrival section
+    docks = end_station_used.get("docks_available", 0)
+    station = end_station_used.get("name", "Unknown")
+    arrival_line = f"Arrival: {docks} - {station}"
 
-    return f"{start_summary} {end_summary}"
+    return "\n\n".join([
+        "\n".join(mech_lines),
+        "\n".join(elec_lines),
+        arrival_line
+    ])
