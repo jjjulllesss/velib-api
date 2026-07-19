@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict, Any
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -38,6 +38,7 @@ class SelectedBike(BaseModel):
     score: int = Field(..., description="Score qualité du vélo")
     bikeRate: int = Field(..., description="Note globale du vélo")
     lastRideTime: Optional[str] = Field(None, description="Dernière heure d'utilisation ISO 8601 (peut être null)")
+    station_name: Optional[str] = Field(None, description="Nom de la station du vélo")
 
 class EndStationUsed(BaseModel):
     id: int = Field(..., description="ID de la station d'arrivée sélectionnée")
@@ -111,10 +112,26 @@ async def get_commute(
         )
 
     # 3. Start selection logic (mechanical bikes)
-    start_station_used = None
     selected_bikes = []
-    start_fallback_used = False
-    no_mechanical_available = True
+    stations_used_info = []
+    primary_had_zero = False
+    primary_had_insufficient = False
+
+    # Check if primary station has bikes
+    primary_sid = start_ids[0]
+    primary_station = station_map.get(primary_sid)
+    if primary_station:
+        primary_mech = [
+            b for b in primary_station.get("bikes", [])
+            if b.get("type") == "mechanical" and b.get("status") == "available"
+        ]
+        if not primary_mech:
+            primary_had_zero = True
+        else:
+            # Check if primary has only 1 bike or no bike with score >= 80
+            has_score_80_or_more = any(int(b.get("score", 0)) >= 80 for b in primary_mech)
+            if len(primary_mech) == 1 or not has_score_80_or_more:
+                primary_had_insufficient = True
 
     for idx, sid in enumerate(start_ids):
         station = station_map.get(sid)
@@ -132,27 +149,54 @@ async def get_commute(
             # Sort bikes (score desc, bikeRate desc, lastRideTime desc, id asc)
             mech_bikes.sort(key=get_bike_sort_key)
             
-            # Keep top 3
-            top_bikes = mech_bikes[:3]
-            selected_bikes = [
-                SelectedBike(
-                    id=str(b.get("id", "")),
-                    dockPosition=str(b.get("dockPosition", "")),
-                    score=int(b.get("score", 0)),
-                    bikeRate=int(b.get("bikeRate", 0)),
-                    lastRideTime=b.get("lastRideTime")
+            # How many can we take?
+            remaining_slots = 3 - len(selected_bikes)
+            if remaining_slots <= 0:
+                break
+
+            top_bikes = mech_bikes[:remaining_slots]
+            for b in top_bikes:
+                selected_bikes.append(
+                    SelectedBike(
+                        id=str(b.get("id", "")),
+                        dockPosition=str(b.get("dockPosition", "")),
+                        score=int(b.get("score", 0)),
+                        bikeRate=int(b.get("bikeRate", 0)),
+                        lastRideTime=b.get("lastRideTime"),
+                        station_name=station.get("name", f"Station {sid}")
+                    )
                 )
-                for b in top_bikes
-            ]
             
-            start_station_used = StartStationUsed(
-                id=sid,
-                name=station.get("name", f"Station {sid}"),
-                priority=idx
-            )
-            start_fallback_used = idx > 0
-            no_mechanical_available = False
-            break
+            stations_used_info.append({
+                "id": sid,
+                "name": station.get("name", f"Station {sid}"),
+                "priority": idx,
+                "bikes_count": len(top_bikes)
+            })
+
+            # Check if we should stop searching other stations.
+            # We can stop if we have at least 2 bikes in selected_bikes AND at least one of them has score >= 80.
+            has_at_least_two = len(selected_bikes) >= 2
+            has_score_80 = any(b.score >= 80 for b in selected_bikes)
+            if has_at_least_two and has_score_80:
+                break
+
+    # Determine fallback used & start station used
+    start_station_used = None
+    start_fallback_used = False
+    no_mechanical_available = True
+
+    if stations_used_info:
+        no_mechanical_available = False
+        # Use the first station we actually got a bike from as start_station_used
+        first_used = stations_used_info[0]
+        start_station_used = StartStationUsed(
+            id=first_used["id"],
+            name=first_used["name"],
+            priority=first_used["priority"]
+        )
+        # Fallback was used if we used any station other than primary
+        start_fallback_used = any(info["priority"] > 0 for info in stations_used_info)
 
     # 4. End selection logic (available docks)
     end_station_used = None
@@ -203,7 +247,10 @@ async def get_commute(
         selected_bikes=[b.model_dump() for b in selected_bikes],
         no_docks_available=no_docks_available,
         end_fallback_used=end_fallback_used,
-        end_station_used=end_station_used.model_dump()
+        end_station_used=end_station_used.model_dump(),
+        primary_had_zero=primary_had_zero,
+        primary_had_insufficient=primary_had_insufficient,
+        stations_used_info=stations_used_info
     )
 
     checked_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

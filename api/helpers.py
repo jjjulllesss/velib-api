@@ -91,7 +91,10 @@ def generate_summary(
     selected_bikes: List[Dict[str, Any]],
     no_docks_available: bool,
     end_fallback_used: bool,
-    end_station_used: Dict[str, Any]
+    end_station_used: Dict[str, Any],
+    primary_had_zero: bool = False,
+    primary_had_insufficient: bool = False,
+    stations_used_info: List[Dict[str, Any]] = None
 ) -> str:
     """
     Generates a human-readable French summary for Apple Shortcuts.
@@ -106,10 +109,30 @@ def generate_summary(
         found_word = "trouvé" if num_bikes <= 1 else "trouvés"
         
         station_name = start_station_used["name"] if start_station_used else "Inconnue"
-        if start_fallback_used:
-            start_summary = f"Pas de vélo mécanique sur la station principale, repli sur {station_name}."
+
+        if primary_had_insufficient:
+            # We had only 1 bike or score < 80 on the main station and used others as well
+            if len(stations_used_info) > 1:
+                # Format a combined list of stations used
+                # Example: "Pas assez de vélos sur la station principale, repli sur Station 2."
+                # Or custom message
+                other_station_names = [info["name"] for info in stations_used_info if info["priority"] > 0]
+                others_str = ", ".join(other_station_names)
+                start_summary = f"Pas assez de vélos sur la station principale, repli sur {others_str}."
+            else:
+                # Fallback was not possible (no other stations available or they had 0 bikes)
+                # Just keep the standard text
+                start_summary = f"Départ {station_name}, {num_bikes} {bike_word} {mech_word} {found_word}."
+        elif primary_had_zero:
+            if start_fallback_used:
+                start_summary = f"Pas de vélo mécanique sur la station principale, repli sur {station_name}."
+            else:
+                start_summary = f"Départ {station_name}, {num_bikes} {bike_word} {mech_word} {found_word}."
         else:
-            start_summary = f"Départ {station_name}, {num_bikes} {bike_word} {mech_word} {found_word}."
+            if start_fallback_used:
+                start_summary = f"Pas de vélo mécanique sur la station principale, repli sur {station_name}."
+            else:
+                start_summary = f"Départ {station_name}, {num_bikes} {bike_word} {mech_word} {found_word}."
 
     # Arrival Part
     if no_docks_available:

@@ -161,7 +161,10 @@ class TestVelibCommute(unittest.TestCase):
             1001: {
                 "name": "Station 1001",
                 "docks_available": 10,
-                "bikes": [{"id": "b1", "type": "mechanical", "status": "available"}]
+                "bikes": [
+                    {"id": "b1", "type": "mechanical", "status": "available", "score": 90},
+                    {"id": "b2", "type": "mechanical", "status": "available", "score": 90}
+                ]
             },
             2001: {
                 "name": "Station 2001",
@@ -183,6 +186,82 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(len(called_ids), 10)
         self.assertEqual(called_ids[:5], [1001, 1002, 1003, 1004, 1005])
         self.assertEqual(called_ids[5:], [2001, 2002, 2003, 2004, 2005])
+
+    @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
+    def test_single_bike_at_primary_returns_it_plus_alternatives(self, mock_fetch: AsyncMock) -> None:
+        # If only one velib is available at the station, check the other stations to give more options
+        mock_fetch.return_value = {
+            1001: {
+                "name": "Station Depart 1",
+                "docks_available": 10,
+                "bikes": [
+                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 90}
+                ]
+            },
+            1002: {
+                "name": "Station Depart 2",
+                "docks_available": 10,
+                "bikes": [
+                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 95},
+                    {"id": "bike_secondary_2", "type": "mechanical", "status": "available", "score": 90}
+                ]
+            },
+            2001: {
+                "name": "Station Arrivee 1",
+                "docks_available": 5,
+                "bikes": []
+            }
+        }
+
+        response = self.client.get("/api/commute?start=1001,1002&end=2001")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["start_fallback_used"])  # Because we also used an alternative station
+        self.assertEqual(len(data["selected_bikes"]), 3)
+        self.assertEqual(data["selected_bikes"][0]["id"], "bike_primary_1")
+        self.assertEqual(data["selected_bikes"][1]["id"], "bike_secondary_1")
+        self.assertEqual(data["selected_bikes"][2]["id"], "bike_secondary_2")
+
+        self.assertIn("Pas assez de vélos sur la station principale, repli sur Station Depart 2.", data["summary"])
+
+    @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
+    def test_no_bike_above_score_80_at_primary_checks_other_stations(self, mock_fetch: AsyncMock) -> None:
+        # If no velib above the score of 80, search for the other stations.
+        mock_fetch.return_value = {
+            1001: {
+                "name": "Station Depart 1",
+                "docks_available": 10,
+                "bikes": [
+                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 70},
+                    {"id": "bike_primary_2", "type": "mechanical", "status": "available", "score": 60}
+                ]
+            },
+            1002: {
+                "name": "Station Depart 2",
+                "docks_available": 10,
+                "bikes": [
+                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 85}
+                ]
+            },
+            2001: {
+                "name": "Station Arrivee 1",
+                "docks_available": 5,
+                "bikes": []
+            }
+        }
+
+        response = self.client.get("/api/commute?start=1001,1002&end=2001")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["start_fallback_used"])
+        self.assertEqual(len(data["selected_bikes"]), 3)
+        self.assertEqual(data["selected_bikes"][0]["id"], "bike_primary_1")
+        self.assertEqual(data["selected_bikes"][1]["id"], "bike_primary_2")
+        self.assertEqual(data["selected_bikes"][2]["id"], "bike_secondary_1")
+
+        self.assertIn("Pas assez de vélos sur la station principale, repli sur Station Depart 2.", data["summary"])
 
 if __name__ == "__main__":
     unittest.main()
