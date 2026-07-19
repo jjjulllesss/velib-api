@@ -35,10 +35,10 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station Depart 1",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_low_score", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3, "lastRideTime": "2026-06-20T14:00:00Z"},
-                    {"id": "bike_high_score_old", "type": "mechanical", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T12:00:00Z"},
-                    {"id": "bike_high_score_new", "type": "mechanical", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T14:30:00Z"},
-                    {"id": "bike_electric", "type": "electric", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T15:00:00Z", "battery_level": 50},
+                    {"id": "bike_low_score", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3, "lastRideTime": "2026-06-20T14:00:00Z", "dockPosition": "1"},
+                    {"id": "bike_high_score_old", "type": "mechanical", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T12:00:00Z", "dockPosition": "2"},
+                    {"id": "bike_high_score_new", "type": "mechanical", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T14:30:00Z", "dockPosition": "3"},
+                    {"id": "bike_electric", "type": "electric", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T15:00:00Z", "battery_level": 50, "dockPosition": "4"},
                 ]
             },
             2001: {
@@ -74,10 +74,16 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(data["end_station_used"]["docks_available"], 5)
         
         # Verify summary
-        self.assertIn("Departure Station Depart 1", data["summary"])
-        self.assertIn("3 mechanical bikes found", data["summary"])
-        self.assertIn("1 electric bike found", data["summary"])
-        self.assertIn("Arrival Station Arrivee 1, 5 docks available.", data["summary"])
+        expected_summary = (
+            "Mechanical:\n"
+            "- 3 (100) Station Depart 1\n"
+            "- 2 (100) Station Depart 1\n"
+            "- 1 (90) Station Depart 1\n\n"
+            "Electrical:\n"
+            "- 4 (100) Station Depart 1\n\n"
+            "Arrival: 5 - Station Arrivee 1"
+        )
+        self.assertEqual(data["summary"], expected_summary)
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_start_fallback_and_end_fallback(self, mock_fetch: AsyncMock) -> None:
@@ -89,14 +95,14 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station Depart 1",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_unavailable", "type": "mechanical", "status": "rented", "score": 100, "bikeRate": 3}
+                    {"id": "bike_unavailable", "type": "mechanical", "status": "rented", "score": 100, "bikeRate": 3, "dockPosition": "1"}
                 ]
             },
             1002: {
                 "name": "Station Depart 2 (Alternative)",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_mech_alt", "type": "mechanical", "status": "available", "score": 95, "bikeRate": 3, "lastRideTime": "2026-06-20T14:00:00Z"}
+                    {"id": "bike_mech_alt", "type": "mechanical", "status": "available", "score": 95, "bikeRate": 3, "lastRideTime": "2026-06-20T14:00:00Z", "dockPosition": "5"}
                 ]
             },
             2001: {
@@ -127,8 +133,14 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(data["end_station_used"]["docks_available"], 12)
         
         # Summary checks
-        self.assertIn("No mechanical bikes on primary station, fallback to Station Depart 2 (Alternative)", data["summary"])
-        self.assertIn("No free docks on primary arrival station, fallback to Station Arrivee 2 (Alternative), 12 docks available.", data["summary"])
+        expected_summary = (
+            "Mechanical:\n"
+            "- 5 (95) Station Depart 2 (Alternative)\n\n"
+            "Electrical:\n"
+            "- None\n\n"
+            "Arrival: 12 - Station Arrivee 2 (Alternative)"
+        )
+        self.assertEqual(data["summary"], expected_summary)
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_no_bikes_no_docks_anywhere(self, mock_fetch: AsyncMock) -> None:
@@ -160,8 +172,14 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(data["end_station_used"]["id"], 2001)
         
         # Summary checks
-        self.assertIn("No bikes available on the departure stations.", data["summary"])
-        self.assertIn("No free docks on arrival stations.", data["summary"])
+        expected_summary = (
+            "Mechanical:\n"
+            "- None\n\n"
+            "Electrical:\n"
+            "- None\n\n"
+            "Arrival: 0 - Station Arrivee 1"
+        )
+        self.assertEqual(data["summary"], expected_summary)
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_deduplication_and_capping(self, mock_fetch: AsyncMock) -> None:
@@ -203,15 +221,15 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station Depart 1",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3}
+                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3, "dockPosition": "1"}
                 ]
             },
             1002: {
                 "name": "Station Depart 2",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 95, "bikeRate": 3},
-                    {"id": "bike_secondary_2", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3}
+                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 95, "bikeRate": 3, "dockPosition": "2"},
+                    {"id": "bike_secondary_2", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3, "dockPosition": "3"}
                 ]
             },
             2001: {
@@ -231,7 +249,16 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(data["selected_mechanical_bikes"][1]["id"], "bike_secondary_1")
         self.assertEqual(data["selected_mechanical_bikes"][2]["id"], "bike_secondary_2")
 
-        self.assertIn("Not enough mechanical bikes on primary station, fallback to Station Depart 2", data["summary"])
+        expected_summary = (
+            "Mechanical:\n"
+            "- 1 (90) Station Depart 1\n"
+            "- 2 (95) Station Depart 2\n"
+            "- 3 (90) Station Depart 2\n\n"
+            "Electrical:\n"
+            "- None\n\n"
+            "Arrival: 5 - Station Arrivee 1"
+        )
+        self.assertEqual(data["summary"], expected_summary)
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_no_bike_above_score_80_at_primary_checks_other_stations(self, mock_fetch: AsyncMock) -> None:
@@ -241,15 +268,15 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station Depart 1",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 70, "bikeRate": 3},
-                    {"id": "bike_primary_2", "type": "mechanical", "status": "available", "score": 60, "bikeRate": 3}
+                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 70, "bikeRate": 3, "dockPosition": "1"},
+                    {"id": "bike_primary_2", "type": "mechanical", "status": "available", "score": 60, "bikeRate": 3, "dockPosition": "2"}
                 ]
             },
             1002: {
                 "name": "Station Depart 2",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 85, "bikeRate": 3}
+                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 85, "bikeRate": 3, "dockPosition": "3"}
                 ]
             },
             2001: {
@@ -269,7 +296,16 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(data["selected_mechanical_bikes"][1]["id"], "bike_primary_2")
         self.assertEqual(data["selected_mechanical_bikes"][2]["id"], "bike_secondary_1")
 
-        self.assertIn("Not enough mechanical bikes on primary station, fallback to Station Depart 2", data["summary"])
+        expected_summary = (
+            "Mechanical:\n"
+            "- 1 (70) Station Depart 1\n"
+            "- 2 (60) Station Depart 1\n"
+            "- 3 (85) Station Depart 2\n\n"
+            "Electrical:\n"
+            "- None\n\n"
+            "Arrival: 5 - Station Arrivee 1"
+        )
+        self.assertEqual(data["summary"], expected_summary)
 
     @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
     def test_new_filtering_rules_bikerate_and_battery(self, mock_fetch: AsyncMock) -> None:
