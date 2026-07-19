@@ -92,6 +92,30 @@ def parse_ids(param_name: str, val: Optional[str]) -> List[int]:
 
 # --- Helper logic for picking bikes of a specific type ---
 
+def is_bike_valid(bike: Dict[str, Any], bike_type: str) -> bool:
+    """
+    Checks if a bike satisfies the criteria:
+    - type matches
+    - status is "available"
+    - bikeRate is exactly 3 (bikes with bikeRate != 3 are not considered)
+    - for electric bikes, battery_level must be >= 20 (battery_level < 20 is not considered)
+    """
+    if bike.get("type") != bike_type:
+        return False
+    if bike.get("status") != "available":
+        return False
+    if bike.get("bikeRate") != 3:
+        return False
+    if bike_type == "electric":
+        bat = bike.get("battery_level")
+        if bat is not None:
+            try:
+                if float(bat) < 20:
+                    return False
+            except (ValueError, TypeError):
+                pass
+    return True
+
 def select_bikes_for_type(
     bike_type: str,
     start_ids: List[int],
@@ -119,7 +143,7 @@ def select_bikes_for_type(
     if primary_station:
         primary_typed_bikes = [
             b for b in primary_station.get("bikes", [])
-            if b.get("type") == bike_type and b.get("status") == "available"
+            if is_bike_valid(b, bike_type)
         ]
         if not primary_typed_bikes:
             primary_had_zero = True
@@ -136,7 +160,7 @@ def select_bikes_for_type(
         bikes = station.get("bikes", [])
         typed_bikes = [
             b for b in bikes
-            if b.get("type") == bike_type and b.get("status") == "available"
+            if is_bike_valid(b, bike_type)
         ]
 
         if typed_bikes:

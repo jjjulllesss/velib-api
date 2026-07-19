@@ -38,7 +38,7 @@ class TestVelibCommute(unittest.TestCase):
                     {"id": "bike_low_score", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3, "lastRideTime": "2026-06-20T14:00:00Z"},
                     {"id": "bike_high_score_old", "type": "mechanical", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T12:00:00Z"},
                     {"id": "bike_high_score_new", "type": "mechanical", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T14:30:00Z"},
-                    {"id": "bike_electric", "type": "electric", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T15:00:00Z"},
+                    {"id": "bike_electric", "type": "electric", "status": "available", "score": 100, "bikeRate": 3, "lastRideTime": "2026-06-20T15:00:00Z", "battery_level": 50},
                 ]
             },
             2001: {
@@ -170,8 +170,8 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station 1001",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "b1", "type": "mechanical", "status": "available", "score": 90},
-                    {"id": "b2", "type": "mechanical", "status": "available", "score": 90}
+                    {"id": "b1", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3},
+                    {"id": "b2", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3}
                 ]
             },
             2001: {
@@ -203,15 +203,15 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station Depart 1",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 90}
+                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3}
                 ]
             },
             1002: {
                 "name": "Station Depart 2",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 95},
-                    {"id": "bike_secondary_2", "type": "mechanical", "status": "available", "score": 90}
+                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 95, "bikeRate": 3},
+                    {"id": "bike_secondary_2", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3}
                 ]
             },
             2001: {
@@ -241,15 +241,15 @@ class TestVelibCommute(unittest.TestCase):
                 "name": "Station Depart 1",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 70},
-                    {"id": "bike_primary_2", "type": "mechanical", "status": "available", "score": 60}
+                    {"id": "bike_primary_1", "type": "mechanical", "status": "available", "score": 70, "bikeRate": 3},
+                    {"id": "bike_primary_2", "type": "mechanical", "status": "available", "score": 60, "bikeRate": 3}
                 ]
             },
             1002: {
                 "name": "Station Depart 2",
                 "docks_available": 10,
                 "bikes": [
-                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 85}
+                    {"id": "bike_secondary_1", "type": "mechanical", "status": "available", "score": 85, "bikeRate": 3}
                 ]
             },
             2001: {
@@ -270,6 +270,42 @@ class TestVelibCommute(unittest.TestCase):
         self.assertEqual(data["selected_mechanical_bikes"][2]["id"], "bike_secondary_1")
 
         self.assertIn("Not enough mechanical bikes on primary station, fallback to Station Depart 2", data["summary"])
+
+    @patch("api.index.fetch_all_stations", new_callable=AsyncMock)
+    def test_new_filtering_rules_bikerate_and_battery(self, mock_fetch: AsyncMock) -> None:
+        # Bikes with a bikeRate different of 3 should be not considered.
+        # For the electrical, a battery level below 20%, the bike is not considered.
+        mock_fetch.return_value = {
+            1001: {
+                "name": "Station Depart 1",
+                "docks_available": 10,
+                "bikes": [
+                    {"id": "bike_bad_rate", "type": "mechanical", "status": "available", "score": 100, "bikeRate": 2},
+                    {"id": "bike_good_rate", "type": "mechanical", "status": "available", "score": 90, "bikeRate": 3},
+                    {"id": "elec_bad_rate", "type": "electric", "status": "available", "score": 100, "bikeRate": 2, "battery_level": 80},
+                    {"id": "elec_low_battery", "type": "electric", "status": "available", "score": 100, "bikeRate": 3, "battery_level": 15},
+                    {"id": "elec_good", "type": "electric", "status": "available", "score": 90, "bikeRate": 3, "battery_level": 25}
+                ]
+            },
+            2001: {
+                "name": "Station Arrivee 1",
+                "docks_available": 5,
+                "bikes": []
+            }
+        }
+
+        response = self.client.get("/api/commute?start=1001&end=2001")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+
+        # Should only have bike_good_rate for mechanical
+        self.assertEqual(len(data["selected_mechanical_bikes"]), 1)
+        self.assertEqual(data["selected_mechanical_bikes"][0]["id"], "bike_good_rate")
+
+        # Should only have elec_good for electric
+        self.assertEqual(len(data["selected_electric_bikes"]), 1)
+        self.assertEqual(data["selected_electric_bikes"][0]["id"], "elec_good")
 
 if __name__ == "__main__":
     unittest.main()
